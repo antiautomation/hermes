@@ -1,13 +1,9 @@
 FROM python:3.12-slim
 
-# The Claude Agent SDK drives the Claude Code CLI as a subprocess, so the image
-# needs Node.js + the `claude` binary on PATH. git is handy for Claude Code's tools.
+# The Claude Agent SDK bundles the Claude Code CLI as a native binary — no Node.js
+# needed. git is handy for Claude Code's built-in tools; ca-certificates for TLS.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code \
-    && apt-get purge -y curl && apt-get autoremove -y \
+    && apt-get install -y --no-install-recommends ca-certificates git \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
