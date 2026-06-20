@@ -2,8 +2,10 @@
 
 ## What this is
 Hermes: a personal assistant hub on a Raspberry Pi 4 (Raspberry Pi OS Lite 64-bit).
-Pi = always-on connectors + scheduler + message I/O. Brain = Claude via Anthropic API.
+Pi = always-on connectors + scheduler + message I/O. Brain = **Claude Code**, driven
+programmatically via the **Claude Agent SDK** (`claude-agent-sdk`).
 User-facing surface = an existing **Telegram bot**.
+(Also deployable as a container on Railway — project `Davids_Hermes`, service `hermes-agent`.)
 
 ## Owner conventions
 - Create branches and PRs proactively for non-trivial changes; don't wait to be asked.
@@ -26,7 +28,9 @@ User-facing surface = an existing **Telegram bot**.
 3. (Deferred) iMessage via a Mac + BlueBubbles, if/when added.
 
 ## Stack
-- `agent/` Python (python-telegram-bot + anthropic SDK). Async.
+- `agent/` Python (python-telegram-bot + `claude-agent-sdk`). Async.
+  The Agent SDK spawns the Claude Code CLI, so the image installs Node.js +
+  `@anthropic-ai/claude-code`. Auth via `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`.
 - `docker-compose.yml` runs the agent and two GoWa instances.
 - `mcp/servers.json` declares MCP tools (Odoo, Mercury, …).
 

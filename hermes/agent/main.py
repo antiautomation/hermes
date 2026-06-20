@@ -1,15 +1,21 @@
 """
-Hermes agent — minimal runnable skeleton.
+Hermes agent — Telegram front-end + Claude Code brain.
 
 What works now:
   - Telegram bot, locked to TELEGRAM_ALLOWED_USER_IDS
-  - If ANTHROPIC_API_KEY is set, replies via Claude; otherwise echoes
+  - The brain is Claude Code, driven programmatically via the Claude Agent SDK
+    (`claude-agent-sdk`). Each message runs one agentic turn with a locked,
+    read-only tool allowlist. Falls back to echo until auth is provided.
   - /approve demo showing the inline approve/reject pattern used for all
     irreversible actions (Odoo writes, outbound messages, Paperclip tickets)
 
+Auth (set ONE in the environment):
+  - ANTHROPIC_API_KEY        pay-as-you-go API billing
+  - CLAUDE_CODE_OAUTH_TOKEN  a Claude Pro/Max/Team subscription (`claude setup-token`)
+
 What Claude Code fills in next:
   - MCP tools (Odoo, Mercury), email/calendar/Fitbit connectors, GoWa webhook
-  - The real agent loop + scheduler
+  - Per-chat session memory + scheduler, and wiring writes through /approve
 """
 import os
 import logging
@@ -27,7 +33,28 @@ BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ALLOWED = {
     int(x) for x in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if x.strip()
 }
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# The Claude Agent SDK / Claude Code CLI read either of these from the env.
+HAS_AUTH = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_CODE_OAUTH_TOKEN"))
+MODEL = os.getenv("HERMES_MODEL", "claude-opus-4-8")
+WORKSPACE = os.getenv("HERMES_WORKSPACE", "/app/workspace")
+
+# Read-only / safe tools only. `permission_mode="dontAsk"` denies anything not
+# listed here without ever blocking on an interactive prompt. Irreversible
+# actions stay out of the agent and go through the Telegram /approve flow.
+ALLOWED_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+
+SYSTEM_PROMPT = (
+    "You are Hermes, a concise personal assistant for your owner, reachable over "
+    "Telegram. Be direct and neutral; skip filler. You run on an always-on server "
+    "with read-only tools for now. Never claim to have taken an irreversible action "
+    "(sending email or WhatsApp, moving money, writing to Odoo) — those are gated "
+    "behind a separate Telegram approval flow and are not wired yet. Mercury banking "
+    "is strictly read-only. If asked to do something you cannot yet do, say so plainly."
+)
+
+# Telegram hard-caps a single message at 4096 chars.
+TG_LIMIT = 4000
 
 
 def authorized(update: Update) -> bool:
@@ -36,18 +63,29 @@ def authorized(update: Update) -> bool:
 
 
 async def think(text: str) -> str:
-    """Send a turn to Claude. Falls back to echo until the key is set."""
-    if not ANTHROPIC_KEY:
-        return f"(echo — no ANTHROPIC_API_KEY yet) {text}"
-    from anthropic import AsyncAnthropic
-    client = AsyncAnthropic(api_key=ANTHROPIC_KEY)
-    msg = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system="You are Hermes, a concise, neutral personal assistant.",
-        messages=[{"role": "user", "content": text}],
+    """Run one Claude Code turn via the Agent SDK. Echoes until auth is set."""
+    if not HAS_AUTH:
+        return f"(echo — set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) {text}"
+
+    from claude_agent_sdk import (
+        query, ClaudeAgentOptions, AssistantMessage, TextBlock,
     )
-    return "".join(b.text for b in msg.content if b.type == "text")
+
+    options = ClaudeAgentOptions(
+        model=MODEL,
+        system_prompt=SYSTEM_PROMPT,
+        allowed_tools=ALLOWED_TOOLS,
+        permission_mode="dontAsk",
+        cwd=WORKSPACE,
+    )
+
+    parts: list[str] = []
+    async for message in query(prompt=text, options=options):
+        if isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    parts.append(block.text)
+    return "".join(parts).strip() or "(no response)"
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
@@ -62,7 +100,12 @@ async def on_message(update: Update, _: ContextTypes.DEFAULT_TYPE):
     if not authorized(update):
         return
     await update.message.chat.send_action("typing")
-    await update.message.reply_text(await think(update.message.text))
+    try:
+        reply = await think(update.message.text)
+    except Exception as e:  # never let a brain error crash the handler
+        log.exception("think failed")
+        reply = f"⚠️ Brain error: {e}"
+    await update.message.reply_text(reply[:TG_LIMIT])
 
 
 async def approve_demo(update: Update, _: ContextTypes.DEFAULT_TYPE):
@@ -89,12 +132,15 @@ async def on_callback(update: Update, _: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    log.info(
+        "Hermes starting — brain=%s model=%s",
+        "claude-code" if HAS_AUTH else "echo (no auth)", MODEL,
+    )
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("approve", approve_demo))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    log.info("Hermes agent starting…")
     app.run_polling()
 
 
