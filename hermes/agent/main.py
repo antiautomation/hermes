@@ -30,9 +30,19 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("hermes")
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-ALLOWED = {
+
+# Lock the bot to the owner. Numeric IDs are the robust form; usernames are a
+# convenience (case-insensitive, can change/be reassigned — prefer IDs long-term).
+# If BOTH lists are empty the bot is unlocked (replies to anyone).
+ALLOWED_IDS = {
     int(x) for x in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",") if x.strip()
 }
+ALLOWED_USERNAMES = {
+    x.strip().lstrip("@").lower()
+    for x in os.getenv("TELEGRAM_ALLOWED_USERNAMES", "").split(",")
+    if x.strip()
+}
+LOCKED = bool(ALLOWED_IDS or ALLOWED_USERNAMES)
 
 # The Claude Agent SDK / Claude Code CLI read either of these from the env.
 HAS_AUTH = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_CODE_OAUTH_TOKEN"))
@@ -59,7 +69,13 @@ TG_LIMIT = 4000
 
 def authorized(update: Update) -> bool:
     user = update.effective_user
-    return bool(user) and (not ALLOWED or user.id in ALLOWED)
+    if not user:
+        return False
+    if not LOCKED:
+        return True
+    if user.id in ALLOWED_IDS:
+        return True
+    return (user.username or "").lower() in ALLOWED_USERNAMES
 
 
 async def think(text: str) -> str:
@@ -133,8 +149,10 @@ async def on_callback(update: Update, _: ContextTypes.DEFAULT_TYPE):
 
 def main():
     log.info(
-        "Hermes starting — brain=%s model=%s",
+        "Hermes starting — brain=%s model=%s lock=%s",
         "claude-code" if HAS_AUTH else "echo (no auth)", MODEL,
+        "OPEN (no allowlist!)" if not LOCKED
+        else f"ids={len(ALLOWED_IDS)} usernames={sorted(ALLOWED_USERNAMES)}",
     )
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
