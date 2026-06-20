@@ -1,0 +1,11 @@
+{
+  "_comment": "MCP servers the agent exposes to Claude as tools. Fill in when wiring.",
+  "mcpServers": {
+    "odoo": {
+      "_note": "odoo-sidekick engine; read-only by default, writes gated by approval"
+    },
+    "mercury": {
+      "_note": "Mercury native MCP — READ-ONLY token only"
+    }
+  }
+}

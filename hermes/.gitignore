@@ -1,0 +1,12 @@
+# Secrets & state — never commit
+.env
+*.env
+!/.env.example
+data/
+vault/
+tokens/
+*.session
+*.session-journal
+__pycache__/
+*.pyc
+.venv/

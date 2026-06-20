@@ -1,0 +1,42 @@
+services:
+  agent:
+    build: ./agent
+    env_file: .env
+    ports:
+      - "8080:8080"            # webhook receiver (WhatsApp/Apple Health/Paperclip)
+    volumes:
+      - ./agent:/app
+      - ./mcp:/app/mcp:ro
+      - ${OBSIDIAN_VAULT_PATH:-./vault}:/vault
+      - ./tokens:/app/tokens
+    restart: unless-stopped
+
+  # WhatsApp bridge — PERSONAL number
+  # NOTE: GoWa env/flag names below are placeholders; confirm against the GoWa
+  # README when wiring. Link by scanning the QR at the web UI on first run.
+  gowa-personal:
+    image: aldinokemal2104/go-whatsapp-web-multidevice:latest
+    environment:
+      - APP_PORT=3000
+      - APP_BASIC_AUTH=${GOWA_BASIC_AUTH}
+      - WHATSAPP_WEBHOOK=${GOWA_WEBHOOK_URL}
+      - WHATSAPP_WEBHOOK_SECRET=${GOWA_WEBHOOK_SECRET}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data/gowa-personal:/app/storages
+    restart: unless-stopped
+
+  # WhatsApp bridge — WORK number (second instance, different port + storage)
+  gowa-work:
+    image: aldinokemal2104/go-whatsapp-web-multidevice:latest
+    environment:
+      - APP_PORT=3000
+      - APP_BASIC_AUTH=${GOWA_BASIC_AUTH}
+      - WHATSAPP_WEBHOOK=${GOWA_WEBHOOK_URL}
+      - WHATSAPP_WEBHOOK_SECRET=${GOWA_WEBHOOK_SECRET}
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./data/gowa-work:/app/storages
+    restart: unless-stopped
