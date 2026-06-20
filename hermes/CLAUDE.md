@@ -37,5 +37,8 @@ User-facing surface = an existing **Telegram bot**.
 ## Notes / TODO to verify when wiring
 - GoWa env/flags in docker-compose are placeholders — confirm against the GoWa README
   before relying on exact names.
-- The 2 org Gmail accounts may require Workspace admin consent for API scopes.
+- Google: broad-scope per-user OAuth (Gmail/Calendar/Drive/Docs/Sheets/Contacts/Tasks).
+  Setup + scopes in `docs/GOOGLE.md`; bootstrap is `agent/google_setup.py` (mints a
+  refresh token → Railway var). Restricted scopes (Gmail/Drive) want an **Internal**
+  Workspace app to avoid Google verification. Agent tool-wiring lands once creds exist.
 - Apple Health has no server pull — data is pushed from iOS (Health Auto Export → webhook).

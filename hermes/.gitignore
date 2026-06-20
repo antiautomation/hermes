@@ -5,6 +5,8 @@
 data/
 vault/
 tokens/
+client_secret*.json
+*credentials*.json
 *.session
 *.session-journal
 __pycache__/

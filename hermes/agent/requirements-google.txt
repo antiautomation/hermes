@@ -1,0 +1,5 @@
+# For the local OAuth bootstrap (google_setup.py). Kept out of the container
+# image until the agent's Google tools are wired, so the runtime stays slim.
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.130
+google-auth>=2.30

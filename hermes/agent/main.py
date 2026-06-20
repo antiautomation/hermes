@@ -21,6 +21,7 @@ import os
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters,
     ContextTypes,
@@ -147,6 +148,17 @@ async def on_callback(update: Update, _: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def on_error(_: object, context: ContextTypes.DEFAULT_TYPE):
+    """A second poller (normal during a deploy rollover) makes Telegram return a
+    409 Conflict. It self-heals once the old container stops, so log it quietly
+    instead of dumping a traceback. Everything else logs with the stack."""
+    err = context.error
+    if isinstance(err, Conflict):
+        log.warning("getUpdates conflict (another poller — usually a deploy rollover); retrying")
+        return
+    log.error("Unhandled error", exc_info=err)
+
+
 def main():
     log.info(
         "Hermes starting — brain=%s model=%s lock=%s",
@@ -159,7 +171,9 @@ def main():
     app.add_handler(CommandHandler("approve", approve_demo))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
-    app.run_polling()
+    app.add_error_handler(on_error)
+    # Drop any backlog of updates queued while we were redeploying.
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
