@@ -50,18 +50,30 @@ HAS_AUTH = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_CODE_OAUTH_T
 MODEL = os.getenv("HERMES_MODEL", "claude-opus-4-8")
 WORKSPACE = os.getenv("HERMES_WORKSPACE", "/app/workspace")
 
-# Read-only / safe tools only. `permission_mode="dontAsk"` denies anything not
-# listed here without ever blocking on an interactive prompt. Irreversible
-# actions stay out of the agent and go through the Telegram /approve flow.
-ALLOWED_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+# Tool surface. Read-only by default. Set HERMES_WRITE_TOOLS=1 to also grant
+# filesystem writes + shell so the owner can configure Hermes from the chat.
+#   - read-only  -> permission_mode "dontAsk": run the allow-list, deny the rest,
+#                   never block on a prompt.
+#   - write mode -> permission_mode "bypassPermissions": run anything unattended
+#                   (requires a non-root container — Claude Code refuses bypass as root).
+# Irreversible EXTERNAL actions (email/WhatsApp/Odoo/money) are NOT exposed here
+# and still go through the Telegram /approve flow.
+READ_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"]
+WRITE_TOOLS = ["Write", "Edit", "MultiEdit", "Bash"]
+WRITE_ENABLED = os.getenv("HERMES_WRITE_TOOLS", "").strip().lower() in ("1", "true", "yes", "on")
+ALLOWED_TOOLS = READ_TOOLS + (WRITE_TOOLS if WRITE_ENABLED else [])
+PERMISSION_MODE = "bypassPermissions" if WRITE_ENABLED else "dontAsk"
 
 SYSTEM_PROMPT = (
     "You are Hermes, a concise personal assistant for your owner, reachable over "
-    "Telegram. Be direct and neutral; skip filler. You run on an always-on server "
-    "with read-only tools for now. Never claim to have taken an irreversible action "
-    "(sending email or WhatsApp, moving money, writing to Odoo) — those are gated "
-    "behind a separate Telegram approval flow and are not wired yet. Mercury banking "
-    "is strictly read-only. If asked to do something you cannot yet do, say so plainly."
+    "Telegram. Be direct and neutral; skip filler. You run inside a container on an "
+    "always-on server; when write tools are enabled you can read/write files and run "
+    "shell commands there. That filesystem is EPHEMERAL — anything outside a mounted "
+    "volume is lost on the next redeploy, so flag it when persistence matters, and "
+    "make lasting changes in the git repo. Never take or claim to have taken an "
+    "irreversible EXTERNAL action — sending email or WhatsApp, moving money, or "
+    "writing to Odoo — those go through a separate Telegram approval flow and are not "
+    "wired yet. Mercury banking is strictly read-only. If you can't yet do something, say so plainly."
 )
 
 # Telegram hard-caps a single message at 4096 chars.
@@ -92,7 +104,7 @@ async def think(text: str) -> str:
         model=MODEL,
         system_prompt=SYSTEM_PROMPT,
         allowed_tools=ALLOWED_TOOLS,
-        permission_mode="dontAsk",
+        permission_mode=PERMISSION_MODE,
         cwd=WORKSPACE,
     )
 
@@ -161,10 +173,11 @@ async def on_error(_: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     log.info(
-        "Hermes starting — brain=%s model=%s lock=%s",
+        "Hermes starting — brain=%s model=%s lock=%s tools=%s",
         "claude-code" if HAS_AUTH else "echo (no auth)", MODEL,
         "OPEN (no allowlist!)" if not LOCKED
         else f"ids={len(ALLOWED_IDS)} usernames={sorted(ALLOWED_USERNAMES)}",
+        f"read+write ({PERMISSION_MODE})" if WRITE_ENABLED else "read-only",
     )
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))

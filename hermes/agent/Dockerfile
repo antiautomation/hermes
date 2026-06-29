@@ -11,8 +11,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
-# Writable scratch dir the agent runs in (mount the Obsidian vault here later).
-ENV HERMES_WORKSPACE=/app/workspace
-RUN mkdir -p /app/workspace
+# Run as non-root: Claude Code refuses bypassPermissions (autonomous write/shell)
+# under root. hermes needs a writable HOME (claude config) + workspace.
+RUN useradd -m -u 10001 hermes \
+    && mkdir -p /app/workspace \
+    && chown -R hermes:hermes /app
+ENV HOME=/home/hermes \
+    HERMES_WORKSPACE=/app/workspace
+USER hermes
 
 CMD ["python", "main.py"]
