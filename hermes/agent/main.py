@@ -18,6 +18,7 @@ What Claude Code fills in next:
   - Per-chat session memory + scheduler, and wiring writes through /approve
 """
 import os
+import asyncio
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -50,6 +51,12 @@ HAS_AUTH = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_CODE_OAUTH_T
 MODEL = os.getenv("HERMES_MODEL", "claude-opus-4-8")
 WORKSPACE = os.getenv("HERMES_WORKSPACE", "/app/workspace")
 
+# Keep turns snappy for chat: bound the agentic loop, default to low thinking
+# effort, and hard-stop a turn that runs away. All tunable via env, no code change.
+MAX_TURNS = int(os.getenv("HERMES_MAX_TURNS", "8"))
+EFFORT = os.getenv("HERMES_EFFORT", "low")
+TURN_TIMEOUT = int(os.getenv("HERMES_TURN_TIMEOUT", "180"))
+
 # Tool surface. Read-only by default. Set HERMES_WRITE_TOOLS=1 to also grant
 # filesystem writes + shell so the owner can configure Hermes from the chat.
 #   - read-only  -> permission_mode "dontAsk": run the allow-list, deny the rest,
@@ -73,7 +80,10 @@ SYSTEM_PROMPT = (
     "make lasting changes in the git repo. Never take or claim to have taken an "
     "irreversible EXTERNAL action — sending email or WhatsApp, moving money, or "
     "writing to Odoo — those go through a separate Telegram approval flow and are not "
-    "wired yet. Mercury banking is strictly read-only. If you can't yet do something, say so plainly."
+    "wired yet. Mercury banking is strictly read-only. If you can't yet do something, "
+    "say so plainly. Default to a fast, direct answer from your own knowledge; reach for "
+    "tools only when genuinely needed, keep tool use minimal, and never run interactive "
+    "or long-blocking shell commands."
 )
 
 # Telegram hard-caps a single message at 4096 chars.
@@ -106,15 +116,25 @@ async def think(text: str) -> str:
         allowed_tools=ALLOWED_TOOLS,
         permission_mode=PERMISSION_MODE,
         cwd=WORKSPACE,
+        max_turns=MAX_TURNS,
+        effort=EFFORT,
     )
 
-    parts: list[str] = []
-    async for message in query(prompt=text, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    parts.append(block.text)
-    return "".join(parts).strip() or "(no response)"
+    async def run() -> str:
+        parts: list[str] = []
+        async for message in query(prompt=text, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        parts.append(block.text)
+        return "".join(parts).strip() or "(no response)"
+
+    try:
+        return await asyncio.wait_for(run(), timeout=TURN_TIMEOUT)
+    except asyncio.TimeoutError:
+        log.warning("turn exceeded %ss — aborted", TURN_TIMEOUT)
+        return (f"⏱️ That ran past {TURN_TIMEOUT}s so I stopped it. "
+                "Try a simpler ask, or break it into steps.")
 
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
@@ -128,12 +148,25 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE):
 async def on_message(update: Update, _: ContextTypes.DEFAULT_TYPE):
     if not authorized(update):
         return
-    await update.message.chat.send_action("typing")
+    chat = update.message.chat
+
+    async def keep_typing():
+        # Telegram's typing status lasts ~5s; refresh it so a long turn never looks dead.
+        try:
+            while True:
+                await chat.send_action("typing")
+                await asyncio.sleep(4)
+        except asyncio.CancelledError:
+            pass
+
+    typer = asyncio.create_task(keep_typing())
     try:
         reply = await think(update.message.text)
     except Exception as e:  # never let a brain error crash the handler
         log.exception("think failed")
         reply = f"⚠️ Brain error: {e}"
+    finally:
+        typer.cancel()
     await update.message.reply_text(reply[:TG_LIMIT])
 
 
@@ -173,8 +206,8 @@ async def on_error(_: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     log.info(
-        "Hermes starting — brain=%s model=%s lock=%s tools=%s",
-        "claude-code" if HAS_AUTH else "echo (no auth)", MODEL,
+        "Hermes starting — brain=%s model=%s effort=%s max_turns=%s timeout=%ss lock=%s tools=%s",
+        "claude-code" if HAS_AUTH else "echo (no auth)", MODEL, EFFORT, MAX_TURNS, TURN_TIMEOUT,
         "OPEN (no allowlist!)" if not LOCKED
         else f"ids={len(ALLOWED_IDS)} usernames={sorted(ALLOWED_USERNAMES)}",
         f"read+write ({PERMISSION_MODE})" if WRITE_ENABLED else "read-only",
